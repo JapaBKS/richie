@@ -2,16 +2,14 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text # Necessário para o comando INSERT no banco de dados
 
+# 1. CONFIGURAÇÃO DA PÁGINA
+st.set_page_config(page_title="Richie Finance OS", layout="wide", page_icon="🚀")
 st.title("🚀 Richie Finance OS")
 
 # Adiciona um botão para limpar o cache manualmente
 if st.button("🔄 Atualizar Dados"):
     st.cache_data.clear()
     st.rerun()
-
-# 1. CONFIGURAÇÃO DA PÁGINA
-st.set_page_config(page_title="Richie Finance OS", layout="wide", page_icon="🚀")
-st.title("🚀 Richie Finance OS")
 
 # 2. CONEXÃO COM O BANCO DE DADOS (SUPABASE)
 conn = st.connection("supabase", type="sql")
