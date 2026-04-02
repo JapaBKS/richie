@@ -1,139 +1,68 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Richie Finance OS", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Migrador Supabase", layout="wide")
+st.title("🚚 O Camião de Mudanças: CSV -> Nuvem")
+st.write("Arrasta os teus ficheiros antigos para aqui e envia-os para a tua nova Base de Dados.")
 
-# --- ESTILIZAÇÃO CUSTOMIZADA ---
-st.markdown("""
-    <style>
-    .main { background-color: #f0f2f6; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    </style>
-    """, unsafe_allow_html=True)
+# --- LIGAÇÃO À BASE DE DADOS ---
+try:
+    conn = st.connection("supabase", type="sql")
+    st.success("✅ Ligação ao Supabase estabelecida com sucesso!")
+except Exception as e:
+    st.error(f"⚠️ Erro ao ligar. Verifica os 'Secrets' no Streamlit: {e}")
+    st.stop()
 
-# --- FUNÇÕES DE PROCESSAMENTO DE DADOS ---
+# --- FUNÇÃO DE LIMPEZA DE MOEDA ---
+def limpar_moeda(val):
+    if pd.isna(val) or str(val).lower() == 'nan': return 0.0
+    val = str(val).replace('R$', '').replace(' ', '').replace('.', '').replace(',', '.').strip()
+    try: return float(val)
+    except: return 0.0
 
-@st.cache_data
-def carregar_e_processar_investimentos(file_path):
-    try:
-        df = pd.read_csv(file_path)
-        df['Data'] = pd.to_datetime(df['Data'])
+col1, col2 = st.columns(2)
+
+# ==========================================
+# MÓDULO 1: HISTÓRICO DE INVESTIMENTOS
+# ==========================================
+with col1:
+    st.subheader("📈 1. Migrar Investimentos")
+    ficheiro_inv = st.file_uploader("Anexa o ficheiro 'negociacoes.CSV'", type=['csv'])
+    
+    if ficheiro_inv is not None:
+        # Ler e limpar diretamente do ficheiro enviado no ecrã
+        df_inv = pd.read_csv(ficheiro_inv, sep=';', header=None, names=['data', 'tipo', 'ticker', 'quantidade', 'preco', 'extra'], on_bad_lines='skip')
+        df_inv['preco'] = df_inv['preco'].apply(limpar_moeda)
+        df_inv['quantidade'] = df_inv['quantidade'].apply(limpar_moeda)
+        df_inv['data'] = pd.to_datetime(df_inv['data'], dayfirst=True, errors='coerce')
+        df_inv = df_inv.dropna(subset=['data'])[['data', 'tipo', 'ticker', 'quantidade', 'preco']]
         
-        portfolio = {}
-        for _, row in df.sort_values('Data').iterrows():
-            ticker = row['Ticker']
-            tipo = row['Tipo']
-            qtd = row['Quantidade']
-            preco = row['Preco']
-            
-            if ticker not in portfolio:
-                portfolio[ticker] = {'qtd': 0.0, 'custo_total': 0.0, 'pm': 0.0}
-            
-            if tipo == 'Compra':
-                portfolio[ticker]['custo_total'] += (qtd * preco)
-                portfolio[ticker]['qtd'] += qtd
-                if portfolio[ticker]['qtd'] > 0:
-                    portfolio[ticker]['pm'] = portfolio[ticker]['custo_total'] / portfolio[ticker]['qtd']
-            elif tipo == 'Venda':
-                # Venda reduz a quantidade, mas o PM mantém-se (regra fiscal)
-                if portfolio[ticker]['qtd'] > 0:
-                    custo_proporcional = qtd * portfolio[ticker]['pm']
-                    portfolio[ticker]['qtd'] -= qtd
-                    portfolio[ticker]['custo_total'] -= custo_proporcional
-                    
-        resumo = pd.DataFrame.from_dict(portfolio, orient='index').reset_index()
-        resumo.columns = ['Ticker', 'Qtd Atual', 'Custo Total', 'Preço Médio']
-        return resumo[resumo['Qtd Atual'] > 0.000001] # Filtra ativos zerados
-    except Exception as e:
-        st.error(f"Erro ao processar investimentos: {e}")
-        return pd.DataFrame()
-
-@st.cache_data
-def carregar_e_processar_caixa(file_path):
-    try:
-        df = pd.read_csv(file_path)
-        df['Data'] = pd.to_datetime(df['Data'])
-        return df
-    except Exception as e:
-        st.error(f"Erro ao processar caixa: {e}")
-        return pd.DataFrame()
-
-# --- SIDEBAR: CONTROLO DE ACESSO ---
-with st.sidebar:
-    st.title("🛡️ Richie Finance")
-    user = st.radio("Entrar como:", ["Pai", "Richie"])
-    st.divider()
-    st.info(f"Acesso atual: **{user}**")
-
-# --- LÓGICA DE INTERFACE ---
-
-if user == "Pai":
-    st.title("🏦 Painel de Contas e Saldos")
-    
-    df_caixa = carregar_e_processar_caixa("db_fluxo_caixa_limpo.csv")
-    
-    if not df_caixa.empty:
-        # Cálculos de Saldo (Somente Entradas vs Saídas Pagas)
-        entradas = df_caixa[df_caixa['Tipo'] == 'Entrada']['Valor'].sum()
-        saidas = df_caixa[(df_caixa['Tipo'] == 'Saída') & (df_caixa['Pago'] == True)]['Valor'].sum()
-        saldo_pai = entradas - saidas
+        st.info(f"Ficheiro lido! Pronto a enviar: {len(df_inv)} registos.")
         
-        # Dashboard resumido para o Pai
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Saldo Disponível", f"R$ {saldo_pai:,.2f}")
-        c2.metric("Total Enviado (PIX)", f"R$ {entradas:,.2f}")
-        c3.metric("Total Gasto", f"R$ {saidas:,.2f}")
-        
-        st.divider()
-        st.subheader("📋 Histórico de Lançamentos")
-        # Mostra apenas o que é relevante para ele
-        st.dataframe(df_caixa.sort_values('Data', ascending=False), use_container_width=True)
-        
-        # Área de Upload para ele
-        with st.expander("📤 Enviar Novo Boleto"):
-            with st.form("upload_boleto"):
-                desc = st.text_input("Descrição do Gasto")
-                val = st.number_input("Valor aproximado", min_value=0.0)
-                file = st.file_uploader("Anexar PDF/Foto", type=['pdf', 'jpg', 'png'])
-                if st.form_submit_button("Enviar para Richie"):
-                    st.success("Enviado! Richie receberá a notificação.")
+        if st.button("📤 Enviar Ações/Cripto para a Nuvem"):
+            with st.spinner("A enviar..."):
+                df_inv.to_sql('investimentos', con=conn.engine, if_exists='append', index=False)
+                st.success("✅ Investimentos migrados para sempre!")
 
-elif user == "Richie":
-    st.title("📈 Dashboard Estratégico (Admin)")
+# ==========================================
+# MÓDULO 2: HISTÓRICO DO PAI (Fluxo de Caixa)
+# ==========================================
+with col2:
+    st.subheader("🏦 2. Migrar Contas do Pai")
+    ficheiro_pai = st.file_uploader("Anexa o ficheiro 'pai.csv'", type=['csv'])
     
-    # Carregar ambas as bases
-    df_inv = carregar_e_processar_investimentos("db_investimentos_limpo.csv")
-    df_caixa = carregar_e_processar_caixa("db_fluxo_caixa_limpo.csv")
-    
-    # 1. CÁLCULO DE PATRIMÓNIO REAL (A Mágica da Custódia)
-    # Supondo que o seu património bruto é a soma do custo total das ações
-    patrimonio_bruto = df_inv['Custo Total'].sum()
-    
-    # Cálculo do saldo do pai que está na sua conta
-    entradas_pai = df_caixa[df_caixa['Tipo'] == 'Entrada']['Valor'].sum()
-    saidas_pai = df_caixa[(df_caixa['Tipo'] == 'Saída') & (df_caixa['Pago'] == True)]['Valor'].sum()
-    saldo_pai = entradas_pai - saidas_pai
-    
-    patrimonio_liquido = patrimonio_bruto - saldo_pai
-    
-    # Top Metrics
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Património Bruto", f"R$ {patrimonio_bruto:,.2f}")
-    m2.metric("Dívida/Custódia (Pai)", f"R$ {saldo_pai:,.2f}", delta="- Saldo do Pai", delta_color="inverse")
-    m3.metric("PATRIMÓNIO LÍQUIDO", f"R$ {patrimonio_liquido:,.2f}", delta="O que é SEU de verdade")
-    
-    st.divider()
-    
-    # 2. CARTEIRA DE ATIVOS
-    st.subheader("🎯 Carteira Consolidada (Preço Médio Calculado)")
-    st.dataframe(df_inv, use_container_width=True)
-    
-    # 3. INSIGHT DE RENDIMENTO DO FLOAT
-    st.info(f"💡 O dinheiro do seu pai (R$ {saldo_pai:,.2f}) está a gerar cerca de **R$ {(saldo_pai * 0.0004):,.2f} de lucro diário** para si no Mercado Pago.")
-
-    # 4. FERRAMENTAS DE ADMIN
-    with st.expander("⚙️ Gerir Lançamentos de Contas"):
-        st.write("Aqui pode dar 'OK' nas contas que o seu pai enviou.")
-        st.dataframe(df_caixa[df_caixa['Pago'] == False])
+    if ficheiro_pai is not None:
+        # Ler ignorando as colunas extra do Excel (focando só no que importa)
+        df_caixa = pd.read_csv(ficheiro_pai, sep=';', header=None, names=['data_vencimento', 'detalhes_despesa', 'categoria', 'custo', 'pago', 'tipo_movimento'], on_bad_lines='skip')
+        
+        df_caixa['custo'] = df_caixa['custo'].apply(limpar_moeda)
+        df_caixa['data_vencimento'] = pd.to_datetime(df_caixa['data_vencimento'], dayfirst=True, errors='coerce')
+        df_caixa['pago'] = df_caixa['pago'].map({'TRUE': True, 'True': True, True: True, 'FALSE': False, 'False': False, False: False})
+        df_caixa = df_caixa.dropna(subset=['data_vencimento'])
+        
+        st.info(f"Ficheiro lido! Pronto a enviar: {len(df_caixa)} registos.")
+        
+        if st.button("📤 Enviar Contas do Pai para a Nuvem"):
+            with st.spinner("A enviar..."):
+                df_caixa.to_sql('fluxo_caixa_pai', con=conn.engine, if_exists='append', index=False)
+                st.success("✅ Contas do Pai migradas para sempre!")
