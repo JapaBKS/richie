@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="Richie Finance OS", layout="wide", page_icon="🚀")
 st.title("🚀 Richie Finance OS")
 
-# Botão de Sincronização
+# Botão de Sincronização no topo
 if st.button("🔄 Atualizar / Sincronizar Dados"):
     st.cache_data.clear()
     st.rerun()
@@ -43,26 +43,26 @@ tab_pai, tab_inv, tab_cartoes = st.tabs(["🏦 Contas do Pai", "📈 Meus Invest
 # ==========================================
 with tab_pai:
     if not df_pai_geral.empty:
-        # --- SELEÇÃO DE MÊS POR BOTÕES ---
-        st.write("### 📅 Selecione o Mês")
-        lista_meses_cron = sorted(df_pai_geral['mes_ano'].unique(), 
-                                 key=lambda x: datetime.strptime(x, '%m/%Y'))
         
-        # Invertemos para o mais recente aparecer primeiro nos botões
-        meses_botoes = lista_meses_cron[::-1]
-        
-        # Criamos uma grade de botões (7 colunas para não poluir tanto)
-        cols_botoes = st.columns(7)
-        if 'mes_selecionado' not in st.session_state:
-            st.session_state.mes_selecionado = meses_botoes[0]
+        # --- SELEÇÃO DE MÊS POR BOTÕES NA SIDEBAR ---
+        with st.sidebar:
+            st.write("### 📅 Selecionar Mês")
+            lista_meses_cron = sorted(df_pai_geral['mes_ano'].unique(), 
+                                     key=lambda x: datetime.strptime(x, '%m/%Y'))
+            
+            meses_botoes = lista_meses_cron[::-1] # Recentes primeiro
+            
+            # Inicializa o estado se não existir
+            if 'mes_selecionado' not in st.session_state:
+                st.session_state.mes_selecionado = meses_botoes[0]
 
-        for i, mes in enumerate(meses_botoes):
-            with cols_botoes[i % 7]:
-                if st.button(mes, key=f"btn_{mes}", use_container_width=True):
+            # Criamos os botões em uma coluna única na sidebar para não poluir
+            for mes in meses_botoes:
+                # Se o botão for o selecionado, ele ganha um destaque visual (opcional em versões futuras do Streamlit)
+                if st.button(mes, key=f"sidebar_btn_{mes}", use_container_width=True):
                     st.session_state.mes_selecionado = mes
         
         mes_selecionado = st.session_state.mes_selecionado
-        st.info(f"Visualizando: **{mes_selecionado}**")
 
         # --- LÓGICA DE SALDO ROLADO ---
         idx_atual = lista_meses_cron.index(mes_selecionado)
@@ -78,12 +78,13 @@ with tab_pai:
         disponivel_final = saldo_anterior + entradas_mes - saidas_mes
 
         # --- DASHBOARD DE MÉTRICAS ---
-        st.subheader(f"Resumo Financeiro - {mes_selecionado}")
+        st.subheader(f"📊 Resumo Financeiro - {mes_selecionado}")
         m1, m2, m3, m4 = st.columns(4)
         
         m1.metric("⬅️ Saldo Anterior", f"R$ {saldo_anterior:,.2f}")
         m2.metric("➕ Entradas do Mês", f"R$ {entradas_mes:,.2f}")
         
+        # Comparação de gastos
         delta_saidas = 0
         if idx_atual > 0:
             mes_ant_nome = lista_meses_cron[idx_atual - 1]
@@ -98,13 +99,13 @@ with tab_pai:
         c_graf, c_form = st.columns([2, 1])
         
         with c_graf:
-            st.write("### Onde o dinheiro foi gasto?")
+            st.write("### Gastos por Categoria")
             gastos_cat = df_mes[df_mes['tipo_movimento'] == 'Saída'].groupby('categoria')['custo'].sum().sort_values()
             if not gastos_cat.empty:
                 st.bar_chart(gastos_cat, horizontal=True)
 
         with c_form:
-            st.write("### Adicionar Lançamento")
+            st.write("### Novo Lançamento")
             with st.form("form_pai_novo", clear_on_submit=True):
                 v_data = st.date_input("Data")
                 v_det = st.text_input("Detalhe")
@@ -120,9 +121,9 @@ with tab_pai:
                     st.cache_data.clear()
                     st.rerun()
 
-        # --- EDITOR DE DADOS ---
+        # --- EDITOR DE DADOS (TABELA) ---
         st.divider()
-        st.write(f"### 📝 Tabela Detalhada de {mes_selecionado}")
+        st.write(f"### 📝 Tabela Detalhada")
         df_edit = df_mes[['id', 'data_vencimento', 'detalhes_despesa', 'categoria', 'custo', 'tipo_movimento', 'pago']].copy()
         
         edited_df = st.data_editor(
@@ -133,13 +134,13 @@ with tab_pai:
             disabled=["id"],
             column_config={
                 "pago": st.column_config.CheckboxColumn("Pago?"),
-                "custo": st.column_config.NumberColumn("Valor (R$)", format="%.2f"),
+                "custo": st.column_config.NumberColumn("Valor", format="%.2f"),
                 "data_vencimento": st.column_config.DateColumn("Vencimento"),
                 "tipo_movimento": st.column_config.SelectboxColumn("Tipo", options=["Saída", "Entrada"])
             }
         )
 
-        if st.button("💾 Confirmar Alterações e Exclusões"):
+        if st.button("💾 Salvar Alterações e Exclusões"):
             ids_atuais = set(edited_df['id'].dropna())
             ids_originais = set(df_edit['id'])
             ids_para_deletar = ids_originais - ids_atuais
@@ -151,7 +152,7 @@ with tab_pai:
                         s.execute(text("UPDATE fluxo_caixa_pai SET detalhes_despesa=:d, categoria=:c, custo=:v, pago=:p, data_vencimento=:dt, tipo_movimento=:t WHERE id=:i"),
                                   {"d": row['detalhes_despesa'], "c": row['categoria'], "v": row['custo'], "p": row['pago'], "dt": row['data_vencimento'], "t": row['tipo_movimento'], "i": row['id']})
                 s.commit()
-            st.success("Tudo atualizado!")
+            st.success("Dados sincronizados!")
             st.cache_data.clear()
             st.rerun()
 
@@ -178,7 +179,6 @@ with tab_inv:
         resumo = pd.DataFrame.from_dict(portfolio, orient='index').reset_index()
         resumo.columns = ['Ticker', 'Qtd Atual', 'Investimento Total', 'Preço Médio']
         resumo = resumo[resumo['Qtd Atual'] > 0.000001]
-        st.subheader("📊 Resumo da Carteira")
         st.dataframe(resumo, use_container_width=True, hide_index=True)
     else:
         st.info("Sem dados de investimentos.")
@@ -188,4 +188,4 @@ with tab_inv:
 # ==========================================
 with tab_cartoes:
     st.header("💳 Controle de Cartões")
-    st.info("Área pronta para receber a lógica de faturas no futuro.")
+    st.info("Área pronta para futuras faturas.")
