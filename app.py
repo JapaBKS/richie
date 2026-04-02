@@ -18,7 +18,6 @@ conn = st.connection("supabase", type="sql")
 # 3. FUNÇÕES PARA LER DADOS
 @st.cache_data(ttl=10)
 def carregar_dados_pai():
-    # Buscamos tudo ordenado por data para o cálculo do saldo acumulado funcionar
     df = conn.query("SELECT * FROM fluxo_caixa_pai ORDER BY data_vencimento ASC;")
     if not df.empty:
         df['data_vencimento'] = pd.to_datetime(df['data_vencimento'])
@@ -44,15 +43,28 @@ tab_pai, tab_inv, tab_cartoes = st.tabs(["🏦 Contas do Pai", "📈 Meus Invest
 # ==========================================
 with tab_pai:
     if not df_pai_geral.empty:
-        # --- LÓGICA DE FILTROS ---
-        # Lista de meses cronológica para os cálculos
+        # --- SELEÇÃO DE MÊS POR BOTÕES ---
+        st.write("### 📅 Selecione o Mês")
         lista_meses_cron = sorted(df_pai_geral['mes_ano'].unique(), 
                                  key=lambda x: datetime.strptime(x, '%m/%Y'))
         
-        # Seletor na barra lateral (mostra o mais recente primeiro)
-        mes_selecionado = st.sidebar.selectbox("Selecione o Mês para Análise", lista_meses_cron[::-1])
+        # Invertemos para o mais recente aparecer primeiro nos botões
+        meses_botoes = lista_meses_cron[::-1]
+        
+        # Criamos uma grade de botões (7 colunas para não poluir tanto)
+        cols_botoes = st.columns(7)
+        if 'mes_selecionado' not in st.session_state:
+            st.session_state.mes_selecionado = meses_botoes[0]
 
-        # --- CÁLCULO DO SALDO ROLADO (O QUE VEM DO PASSADO) ---
+        for i, mes in enumerate(meses_botoes):
+            with cols_botoes[i % 7]:
+                if st.button(mes, key=f"btn_{mes}", use_container_width=True):
+                    st.session_state.mes_selecionado = mes
+        
+        mes_selecionado = st.session_state.mes_selecionado
+        st.info(f"Visualizando: **{mes_selecionado}**")
+
+        # --- LÓGICA DE SALDO ROLADO ---
         idx_atual = lista_meses_cron.index(mes_selecionado)
         meses_anteriores = lista_meses_cron[:idx_atual]
         
@@ -60,22 +72,18 @@ with tab_pai:
         saldo_anterior = df_passado[df_passado['tipo_movimento'] == 'Entrada']['custo'].sum() - \
                          df_passado[df_passado['tipo_movimento'] == 'Saída']['custo'].sum()
 
-        # --- CÁLCULOS DO MÊS SELECIONADO ---
         df_mes = df_pai_geral[df_pai_geral['mes_ano'] == mes_selecionado]
         entradas_mes = df_mes[df_mes['tipo_movimento'] == 'Entrada']['custo'].sum()
         saidas_mes = df_mes[df_mes['tipo_movimento'] == 'Saída']['custo'].sum()
-        
-        # Disponível Final = Saldo que já tinha + Entradas novas - Gastos novos
         disponivel_final = saldo_anterior + entradas_mes - saidas_mes
 
-        # --- DASHBOARD DE MÉTRICAS (4 COLUNAS) ---
+        # --- DASHBOARD DE MÉTRICAS ---
         st.subheader(f"Resumo Financeiro - {mes_selecionado}")
         m1, m2, m3, m4 = st.columns(4)
         
-        m1.metric("⬅️ Saldo Anterior", f"R$ {saldo_anterior:,.2f}", help="O que sobrou acumulado de todos os meses passados.")
-        m2.metric("➕ Entradas do Mês", f"R$ {entradas_mes:,.2f}", help="Soma de todos os ganhos/depósitos deste mês.")
+        m1.metric("⬅️ Saldo Anterior", f"R$ {saldo_anterior:,.2f}")
+        m2.metric("➕ Entradas do Mês", f"R$ {entradas_mes:,.2f}")
         
-        # Cálculo de delta de gastos vs mês anterior
         delta_saidas = 0
         if idx_atual > 0:
             mes_ant_nome = lista_meses_cron[idx_atual - 1]
@@ -83,7 +91,7 @@ with tab_pai:
             delta_saidas = saidas_mes - saidas_ant
 
         m3.metric("💸 Saídas do Mês", f"R$ {saidas_mes:,.2f}", f"{delta_saidas:,.2f} vs mês ant.", delta_color="inverse")
-        m4.metric("💰 Disponível Final", f"R$ {disponivel_final:,.2f}", help="Valor total disponível após todas as entradas e saídas.")
+        m4.metric("💰 Disponível Final", f"R$ {disponivel_final:,.2f}")
 
         # --- GRÁFICO E FORMULÁRIO ---
         st.divider()
@@ -94,33 +102,27 @@ with tab_pai:
             gastos_cat = df_mes[df_mes['tipo_movimento'] == 'Saída'].groupby('categoria')['custo'].sum().sort_values()
             if not gastos_cat.empty:
                 st.bar_chart(gastos_cat, horizontal=True)
-            else:
-                st.info("Nenhuma saída registrada neste mês.")
 
         with c_form:
-            st.write("### Adicionar Novo Lançamento")
+            st.write("### Adicionar Lançamento")
             with st.form("form_pai_novo", clear_on_submit=True):
-                v_data = st.date_input("Data de Vencimento")
-                v_det = st.text_input("Detalhe (ex: Aluguel)")
+                v_data = st.date_input("Data")
+                v_det = st.text_input("Detalhe")
                 v_cat = st.selectbox("Categoria", ["Aluguel Granatto", "Du", "PUC", "Nubank", "Gás", "Condomínio", "Limpeza", "Compras", "PIX", "Outros"])
-                v_val = st.number_input("Valor (R$)", min_value=0.0, format="%.2f")
-                v_tipo = st.selectbox("Tipo de Movimento", ["Saída", "Entrada"])
+                v_val = st.number_input("Valor", min_value=0.0, format="%.2f")
+                v_tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
                 v_pago = st.checkbox("Pago?", value=True)
-                
-                if st.form_submit_button("💾 Salvar no Banco"):
+                if st.form_submit_button("💾 Salvar"):
                     with conn.session as s:
                         s.execute(text("INSERT INTO fluxo_caixa_pai (data_vencimento, detalhes_despesa, categoria, custo, pago, tipo_movimento) VALUES (:d, :det, :c, :v, :p, :t)"),
                                   {"d": v_data, "det": v_det, "c": v_cat, "v": v_val, "p": v_pago, "t": v_tipo})
                         s.commit()
-                    st.success("Salvo com sucesso!")
                     st.cache_data.clear()
                     st.rerun()
 
-        # --- EDITOR DE DADOS (PARA MODIFICAR OU APAGAR) ---
+        # --- EDITOR DE DADOS ---
         st.divider()
         st.write(f"### 📝 Tabela Detalhada de {mes_selecionado}")
-        st.caption("Dica: Para APAGAR, selecione a linha clicando na lateral esquerda dela e aperte 'Delete' no seu teclado. Depois clique em Salvar.")
-        
         df_edit = df_mes[['id', 'data_vencimento', 'detalhes_despesa', 'categoria', 'custo', 'tipo_movimento', 'pago']].copy()
         
         edited_df = st.data_editor(
@@ -141,19 +143,15 @@ with tab_pai:
             ids_atuais = set(edited_df['id'].dropna())
             ids_originais = set(df_edit['id'])
             ids_para_deletar = ids_originais - ids_atuais
-
             with conn.session as s:
-                # 1. Remove o que foi deletado na interface
                 for id_del in ids_para_deletar:
                     s.execute(text("DELETE FROM fluxo_caixa_pai WHERE id = :i"), {"i": id_del})
-                
-                # 2. Atualiza o que foi alterado
                 for _, row in edited_df.iterrows():
                     if pd.notna(row['id']):
                         s.execute(text("UPDATE fluxo_caixa_pai SET detalhes_despesa=:d, categoria=:c, custo=:v, pago=:p, data_vencimento=:dt, tipo_movimento=:t WHERE id=:i"),
                                   {"d": row['detalhes_despesa'], "c": row['categoria'], "v": row['custo'], "p": row['pago'], "dt": row['data_vencimento'], "t": row['tipo_movimento'], "i": row['id']})
                 s.commit()
-            st.success("Tudo atualizado na nuvem!")
+            st.success("Tudo atualizado!")
             st.cache_data.clear()
             st.rerun()
 
@@ -180,12 +178,10 @@ with tab_inv:
         resumo = pd.DataFrame.from_dict(portfolio, orient='index').reset_index()
         resumo.columns = ['Ticker', 'Qtd Atual', 'Investimento Total', 'Preço Médio']
         resumo = resumo[resumo['Qtd Atual'] > 0.000001]
-        
         st.subheader("📊 Resumo da Carteira")
         st.dataframe(resumo, use_container_width=True, hide_index=True)
-        
-        with st.expander("📄 Ver Histórico de Transações"):
-            st.dataframe(df_inv, use_container_width=True, hide_index=True)
+    else:
+        st.info("Sem dados de investimentos.")
 
 # ==========================================
 # ABA 3: CARTÕES
