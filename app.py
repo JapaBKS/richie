@@ -7,7 +7,7 @@ from datetime import datetime
 st.set_page_config(page_title="Richie Finance OS", layout="wide", page_icon="🚀")
 st.title("🚀 Richie Finance OS")
 
-# Botão para limpar o cache manualmente
+# Botão de Sincronização
 if st.button("🔄 Atualizar / Sincronizar Dados"):
     st.cache_data.clear()
     st.rerun()
@@ -18,10 +18,9 @@ conn = st.connection("supabase", type="sql")
 # 3. FUNÇÕES PARA LER DADOS
 @st.cache_data(ttl=10)
 def carregar_dados_pai():
-    df = conn.query("SELECT * FROM fluxo_caixa_pai ORDER BY data_vencimento DESC;")
+    df = conn.query("SELECT * FROM fluxo_caixa_pai ORDER BY data_vencimento ASC;")
     if not df.empty:
         df['data_vencimento'] = pd.to_datetime(df['data_vencimento'])
-        # Criar coluna auxiliar de Mês/Ano para filtros
         df['mes_ano'] = df['data_vencimento'].dt.strftime('%m/%Y')
     return df
 
@@ -37,151 +36,152 @@ df_pai_geral = carregar_dados_pai()
 df_inv = carregar_investimentos()
 
 # 5. CRIAÇÃO DAS ABAS
-tab_pai, tab_inv, tab_cartoes = st.tabs(["🏦 Contas do Pai", "📈 Meus Investimentos", "💳 Despesas Cartão"])
+tab_pai, tab_inv, tab_cartoes = st.tabs(["🏦 Contas do Pai", "📈 Meus Investimentos", "💳 Cartões"])
 
 # ==========================================
-# ABA 1: CONTAS DO PAI
+# ABA 1: CONTAS DO PAI (SISTEMA DE SALDO ROLADO)
 # ==========================================
 with tab_pai:
     if not df_pai_geral.empty:
-        # --- FILTROS NA SIDEBAR (APENAS PARA ESTA ABA) ---
-        lista_meses = sorted(df_pai_geral['mes_ano'].unique(), key=lambda x: datetime.strptime(x, '%m/%Y'), reverse=True)
-        mes_selecionado = st.sidebar.selectbox("Selecione o Mês de Análise", lista_meses)
-
-        # --- LÓGICA DE MÉTRICAS (Mês Atual vs Anterior) ---
-        df_mes_atual = df_pai_geral[df_pai_geral['mes_ano'] == mes_selecionado]
+        # --- LÓGICA DE FILTROS ---
+        # Ordenamos os meses cronologicamente para o cálculo do saldo rolado
+        lista_meses_cronologica = sorted(df_pai_geral['mes_ano'].unique(), 
+                                        key=lambda x: datetime.strptime(x, '%m/%Y'))
         
-        entradas_atuais = df_mes_atual[df_mes_atual['tipo_movimento'] == 'Entrada']['custo'].sum()
-        saidas_atuais = df_mes_atual[df_mes_atual['tipo_movimento'] == 'Saída']['custo'].sum()
-        disponivel_mes = entradas_atuais - saidas_atuais
+        mes_selecionado = st.sidebar.selectbox("Selecione o Mês", lista_meses_cronologica[::-1])
 
-        # Cálculo do Delta (Comparação com mês anterior na lista)
-        delta_saidas = 0
-        try:
-            idx_atual = lista_meses.index(mes_selecionado)
-            if idx_atual < len(lista_meses) - 1:
-                mes_anterior = lista_meses[idx_atual + 1]
-                saidas_anteriores = df_pai_geral[(df_pai_geral['mes_ano'] == mes_anterior) & (df_pai_geral['tipo_movimento'] == 'Saída')]['custo'].sum()
-                delta_saidas = saidas_atuais - saidas_anteriores
-        except:
-            pass
+        # --- CÁLCULO DO SALDO QUE VEM DO PASSADO ---
+        idx_atual = lista_meses_cronologica.index(mes_selecionado)
+        meses_anteriores = lista_meses_cronologica[:idx_atual]
+        
+        df_passado = df_pai_geral[df_pai_geral['mes_ano'].isin(meses_anteriores)]
+        saldo_anterior = df_passado[df_passado['tipo_movimento'] == 'Entrada']['custo'].sum() - \
+                         df_passado[df_passado['tipo_movimento'] == 'Saída']['custo'].sum()
 
-        # --- EXIBIÇÃO DE MÉTRICAS ---
+        # --- DADOS DO MÊS ATUAL ---
+        df_mes = df_pai_geral[df_pai_geral['mes_ano'] == mes_selecionado]
+        entradas_mes = df_mes[df_mes['tipo_movimento'] == 'Entrada']['custo'].sum()
+        saidas_mes = df_mes[df_mes['tipo_movimento'] == 'Saída']['custo'].sum()
+        
+        disponivel_final = saldo_anterior + entradas_mes - saidas_mes
+
+        # --- DASHBOARD DE MÉTRICAS ---
         st.subheader(f"Resumo de {mes_selecionado}")
         m1, m2, m3 = st.columns(3)
-        m1.metric("💰 Disponível no Mês", f"R$ {disponivel_mes:,.2f}", help="Soma de Entradas - Saídas (mesmo as não pagas)")
-        m2.metric("💸 Total Saídas", f"R$ {saidas_atuais:,.2f}", f"{delta_saidas:,.2f} vs mês ant.", delta_color="inverse")
+        m1.metric("⬅️ Sobrou do Mês Anterior", f"R$ {saldo_anterior:,.2f}")
         
-        saldo_acumulado = df_pai_geral[df_pai_geral['tipo_movimento'] == 'Entrada']['custo'].sum() - df_pai_geral[df_pai_geral['tipo_movimento'] == 'Saída']['custo'].sum()
-        m3.metric("🏦 Saldo Geral (Histórico)", f"R$ {saldo_acumulado:,.2f}")
+        # Cálculo de comparação de gastos vs mês anterior
+        delta_saidas = 0
+        if idx_atual > 0:
+            mes_ant = lista_meses_cronologica[idx_atual - 1]
+            saidas_ant = df_pai_geral[(df_pai_geral['mes_ano'] == mes_ant) & (df_pai_geral['tipo_movimento'] == 'Saída')]['custo'].sum()
+            delta_saidas = saidas_mes - saidas_ant
 
-        # --- GRÁFICO DE CATEGORIAS ---
+        m2.metric("💸 Gastos do Mês", f"R$ {saidas_mes:,.2f}", f"{delta_saidas:,.2f} vs mês ant.", delta_color="inverse")
+        m3.metric("💰 Disponível Final", f"R$ {disponivel_final:,.2f}", help="Saldo total acumulado até o fim deste mês")
+
+        # --- GRÁFICO E FORMULÁRIO ---
         st.divider()
-        col_graf, col_form = st.columns([2, 1])
+        c_graf, c_form = st.columns([2, 1])
         
-        with col_graf:
-            st.write("### Gastos por Categoria")
-            gastos_cat = df_mes_atual[df_mes_atual['tipo_movimento'] == 'Saída'].groupby('categoria')['custo'].sum().sort_values(ascending=True)
+        with c_graf:
+            st.write("### Divisão de Gastos")
+            gastos_cat = df_mes[df_mes['tipo_movimento'] == 'Saída'].groupby('categoria')['custo'].sum().sort_values()
             if not gastos_cat.empty:
                 st.bar_chart(gastos_cat, horizontal=True)
-            else:
-                st.info("Sem saídas registradas neste mês.")
 
-        with col_form:
-            # --- FORMULÁRIO PARA ADICIONAR NOVA CONTA ---
-            st.write("### Adicionar Conta")
-            with st.form("form_novo_gasto_pai", clear_on_submit=True):
-                nova_data = st.date_input("Data")
-                novo_detalhe = st.text_input("Detalhe (ex: Aluguel)")
-                nova_cat = st.selectbox("Categoria", ["Aluguel Granatto", "Du", "PUC", "Nubank", "Gás", "Condomínio", "Limpeza", "Compras", "PIX", "Outros"])
-                novo_valor = st.number_input("Valor", min_value=0.0, step=0.01)
-                novo_tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
-                novo_pago = st.checkbox("Pago?")
-                
-                if st.form_submit_button("💾 Salvar na Nuvem"):
+        with c_form:
+            st.write("### Nova Conta")
+            with st.form("form_pai", clear_on_submit=True):
+                v_data = st.date_input("Data")
+                v_det = st.text_input("Detalhe")
+                v_cat = st.selectbox("Categoria", ["Aluguel Granatto", "Du", "PUC", "Nubank", "Gás", "Condomínio", "Limpeza", "Compras", "PIX", "Outros"])
+                v_val = st.number_input("Valor", min_value=0.0, format="%.2f")
+                v_tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
+                v_pago = st.checkbox("Pago?")
+                if st.form_submit_button("💾 Salvar"):
                     with conn.session as s:
-                        s.execute(text('''
-                            INSERT INTO fluxo_caixa_pai (data_vencimento, detalhes_despesa, categoria, custo, pago, tipo_movimento)
-                            VALUES (:dv, :dd, :ca, :cu, :pa, :ti)
-                        '''), {"dv": nova_data, "dd": novo_detalhe, "ca": nova_cat, "cu": novo_valor, "pa": novo_pago, "ti": novo_tipo})
+                        s.execute(text("INSERT INTO fluxo_caixa_pai (data_vencimento, detalhes_despesa, categoria, custo, pago, tipo_movimento) VALUES (:d, :det, :c, :v, :p, :t)"),
+                                  {"d": v_data, "det": v_det, "c": v_cat, "v": v_val, "p": v_pago, "t": v_tipo})
                         s.commit()
-                    st.success("Salvo!")
                     st.cache_data.clear()
                     st.rerun()
 
-        # --- TABELA INTERATIVA (EDIÇÃO) ---
+        # --- EDITOR DE DADOS (PARA MODIFICAR OU APAGAR) ---
         st.divider()
         st.write(f"### 📝 Editar Lançamentos de {mes_selecionado}")
-        st.caption("Dê um duplo clique na célula para alterar. Clique fora da tabela e depois no botão abaixo para salvar.")
         
-        df_editavel = df_mes_atual[['id', 'data_vencimento', 'detalhes_despesa', 'categoria', 'custo', 'tipo_movimento', 'pago']].copy()
+        # Filtramos as colunas para o editor
+        df_edit = df_mes[['id', 'data_vencimento', 'detalhes_despesa', 'categoria', 'custo', 'tipo_movimento', 'pago']].copy()
         
-        # O data_editor permite alterar os dados como se fosse Excel
-        dados_editados = st.data_editor(
-            df_editavel,
+        # O num_rows="dynamic" permite que você delete linhas selecionando-as e apertando 'Delete'
+        edited_df = st.data_editor(
+            df_edit,
             hide_index=True,
             use_container_width=True,
+            num_rows="dynamic",
             disabled=["id"],
             column_config={
                 "pago": st.column_config.CheckboxColumn("Pago?"),
                 "custo": st.column_config.NumberColumn("Valor (R$)", format="%.2f"),
-                "data_vencimento": st.column_config.DateColumn("Data")
+                "data_vencimento": st.column_config.DateColumn("Vencimento")
             }
         )
 
-        if st.button("💾 Confirmar Alterações na Nuvem"):
+        if st.button("💾 Salvar Alterações na Nuvem"):
+            # Lógica para sincronizar: deletar o que sumiu e atualizar o que mudou
+            ids_atuais = set(edited_df['id'].dropna())
+            ids_originais = set(df_edit['id'])
+            ids_para_deletar = ids_originais - ids_atuais
+
             with conn.session as s:
-                for _, row in dados_editados.iterrows():
-                    s.execute(text('''
-                        UPDATE fluxo_caixa_pai 
-                        SET detalhes_despesa=:d, categoria=:c, custo=:v, pago=:p, data_vencimento=:dt
-                        WHERE id=:i
-                    '''), {"d": row['detalhes_despesa'], "c": row['categoria'], "v": row['custo'], "p": row['pago'], "dt": row['data_vencimento'], "i": row['id']})
+                # 1. Deletar removidos
+                for id_del in ids_para_deletar:
+                    s.execute(text("DELETE FROM fluxo_caixa_pai WHERE id = :i"), {"i": id_del})
+                
+                # 2. Atualizar existentes
+                for _, row in edited_df.iterrows():
+                    if pd.notna(row['id']):
+                        s.execute(text("UPDATE fluxo_caixa_pai SET detalhes_despesa=:d, categoria=:c, custo=:v, pago=:p, data_vencimento=:dt WHERE id=:i"),
+                                  {"d": row['detalhes_despesa'], "c": row['categoria'], "v": row['custo'], "p": row['pago'], "dt": row['data_vencimento'], "i": row['id']})
                 s.commit()
-            st.success("Banco de Dados Atualizado!")
+            st.success("Sincronizado com sucesso!")
             st.cache_data.clear()
             st.rerun()
-    else:
-        st.info("Nenhum dado encontrado no Fluxo de Caixa.")
 
 # ==========================================
-# ABA 2: INVESTIMENTOS
+# ABA 2: INVESTIMENTOS (PREÇO MÉDIO)
 # ==========================================
 with tab_inv:
     st.header("📈 Meu Patrimônio")
     if not df_inv.empty:
-        # Lógica de Preço Médio
         portfolio = {}
         for _, row in df_inv.iterrows():
-            ticker, tipo, qtd, preco = row['ticker'], row['tipo'], float(row['quantidade']), float(row['preco'])
-            if ticker not in portfolio: portfolio[ticker] = {'qtd': 0.0, 'custo_total': 0.0, 'pm': 0.0}
-            
-            if tipo == 'Compra':
-                portfolio[ticker]['custo_total'] += (qtd * preco)
-                portfolio[ticker]['qtd'] += qtd
-                if portfolio[ticker]['qtd'] > 0:
-                    portfolio[ticker]['pm'] = portfolio[ticker]['custo_total'] / portfolio[ticker]['qtd']
-            elif tipo == 'Venda':
-                if portfolio[ticker]['qtd'] > 0:
-                    custo_proporcional = qtd * portfolio[ticker]['pm']
-                    portfolio[ticker]['qtd'] -= qtd
-                    portfolio[ticker]['custo_total'] -= custo_proporcional
+            tk, tp, q, pr = row['ticker'], row['tipo'], float(row['quantidade']), float(row['preco'])
+            if tk not in portfolio: portfolio[tk] = {'qtd': 0.0, 'custo': 0.0, 'pm': 0.0}
+            if tp == 'Compra':
+                portfolio[tk]['custo'] += (q * pr)
+                portfolio[tk]['qtd'] += q
+                if portfolio[tk]['qtd'] > 0: portfolio[tk]['pm'] = portfolio[tk]['custo'] / portfolio[tk]['qtd']
+            elif tp == 'Venda':
+                if portfolio[tk]['qtd'] > 0:
+                    custo_venda = q * portfolio[tk]['pm']
+                    portfolio[tk]['qtd'] -= q
+                    portfolio[tk]['custo'] -= custo_venda
 
         resumo = pd.DataFrame.from_dict(portfolio, orient='index').reset_index()
-        resumo.columns = ['Ticker', 'Qtd Atual', 'Custo Total', 'Preço Médio']
+        resumo.columns = ['Ticker', 'Qtd Atual', 'Investimento Total', 'Preço Médio']
         resumo = resumo[resumo['Qtd Atual'] > 0.000001]
         
         st.subheader("📊 Resumo da Carteira")
         st.dataframe(resumo, use_container_width=True, hide_index=True)
         
-        with st.expander("📄 Ver Histórico Completo"):
+        with st.expander("📄 Ver Histórico de Transações"):
             st.dataframe(df_inv, use_container_width=True, hide_index=True)
-    else:
-        st.info("Importe seus investimentos para visualizar o preço médio.")
 
 # ==========================================
 # ABA 3: CARTÕES
 # ==========================================
 with tab_cartoes:
     st.header("💳 Controle de Cartões")
-    st.info("Área pronta para receber a lógica de faturas no próximo passo.")
+    st.info("Aqui vamos separar o que é seu e o que é do seu pai nas faturas futuras.")
