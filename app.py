@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import text # Necessário para o comando INSERT
+from sqlalchemy import text # Necessário para o comando INSERT no banco de dados
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Richie Finance OS", layout="wide", page_icon="🚀")
 st.title("🚀 Richie Finance OS")
 
-# 2. LIGAÇÃO AO BANCO DE DADOS (SUPABASE)
+# 2. CONEXÃO COM O BANCO DE DADOS (SUPABASE)
 conn = st.connection("supabase", type="sql")
 
 # 3. FUNÇÕES PARA LER DADOS (Com Cache para ser rápido)
@@ -36,12 +36,12 @@ with tab_pai:
     # --- FORMULÁRIO PARA ADICIONAR NOVA CONTA ---
     with st.expander("➕ Adicionar Nova Despesa / Entrada", expanded=False):
         with st.form("form_novo_gasto_pai", clear_on_submit=True):
-            st.write("Preenche os dados para guardar na nuvem:")
+            st.write("Preencha os dados para salvar na nuvem:")
             
             c1, c2, c3 = st.columns(3)
             nova_data = c1.date_input("Data de Vencimento")
             novo_detalhe = c2.text_input("Detalhes da Despesa (ex: Aluguel)")
-            # Podes adicionar mais categorias a esta lista depois!
+            # Você pode adicionar mais categorias a esta lista depois!
             nova_categoria = c3.selectbox("Categoria", ["Aluguel Granatto", "Du", "PUC", "Nubank", "Gás", "Condomínio", "Limpeza", "Compras", "Outros"])
             
             c4, c5, c6 = st.columns(3)
@@ -54,7 +54,7 @@ with tab_pai:
             # Lógica para enviar para o Supabase
             if btn_salvar:
                 if novo_detalhe == "":
-                    st.error("⚠️ Por favor, preenche os Detalhes da Despesa.")
+                    st.error("⚠️ Por favor, preencha os Detalhes da Despesa.")
                 elif novo_custo <= 0:
                     st.error("⚠️ O valor deve ser maior que zero.")
                 else:
@@ -73,9 +73,9 @@ with tab_pai:
                             "tipo": novo_tipo
                         })
                         s.commit()
-                    st.success("✅ Gasto guardado com sucesso!")
+                    st.success("✅ Gasto salvo com sucesso!")
                     st.cache_data.clear() # Força o app a ler a nuvem novamente
-                    st.rerun() # Atualiza o ecrã na hora
+                    st.rerun() # Atualiza a tela na hora
 
     # --- VISUALIZAÇÃO DOS DADOS ---
     df_pai = carregar_caixa_pai()
@@ -96,13 +96,13 @@ with tab_pai:
             hide_index=True
         )
     else:
-        st.info("Nenhuma conta encontrada. Adiciona a primeira no botão acima!")
+        st.info("Nenhuma conta encontrada. Adicione a primeira no botão acima!")
 
 # ==========================================
 # ABA 2: INVESTIMENTOS
 # ==========================================
 with tab_inv:
-    st.header("O meu Património")
+    st.header("Meu Patrimônio")
     
     try:
         df_inv = carregar_investimentos()
@@ -140,14 +140,14 @@ with tab_inv:
             st.subheader("📝 Histórico de Transações")
             st.dataframe(df_inv[['data', 'tipo', 'ticker', 'quantidade', 'preco', 'valor']], use_container_width=True, hide_index=True)
         else:
-            st.info("Ainda não importaste o ficheiro de investimentos para a nuvem.")
+            st.info("Você ainda não importou o arquivo de investimentos para a nuvem.")
             
     except Exception as e:
-        st.error(f"Erro a ler investimentos: {e}")
+        st.error(f"Erro ao ler investimentos: {e}")
 
 # ==========================================
 # ABA 3: CARTÕES
 # ==========================================
 with tab_cartoes:
-    st.header("Controlo de Faturas de Cartão")
-    st.info("Estrutura criada na base de dados! No próximo passo vamos importar as tuas faturas para aqui para separarmos os gastos do teu pai dos teus.")
+    st.header("Controle de Faturas de Cartão")
+    st.info("Estrutura criada no banco de dados! No próximo passo vamos importar suas faturas para cá e separar os seus gastos dos gastos do seu pai.")
