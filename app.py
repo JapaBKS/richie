@@ -1,8 +1,15 @@
 import streamlit as st
 import pandas as pd
 
+# 1. Faz a conexão (o Streamlit busca a senha nos Secrets sozinho)
+conn = st.connection("supabase", type="sql")
+
+# 2. Testa se deu certo (puxando a tabela do seu pai, por exemplo)
+df_teste = conn.query("SELECT * FROM fluxo_caixa_pai LIMIT 5")
+
 st.set_page_config(page_title="Migrador Supabase", layout="wide")
 st.title("🚚 O Camião de Mudanças: CSV -> Nuvem")
+st.dataframe(df_teste)
 st.write("Arrasta os teus ficheiros antigos para aqui e envia-os para a tua nova Base de Dados.")
 
 # --- LIGAÇÃO À BASE DE DADOS ---
