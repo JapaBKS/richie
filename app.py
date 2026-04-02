@@ -129,14 +129,17 @@ with tab_pai:
         edited_df = st.data_editor(
             df_edit,
             hide_index=True,
-            use_container_width=True,
+            use_container_width=True, # Mantém a tabela expandida
             num_rows="dynamic",
             disabled=["id"],
             column_config={
-                "pago": st.column_config.CheckboxColumn("Pago?"),
-                "custo": st.column_config.NumberColumn("Valor", format="%.2f"),
-                "data_vencimento": st.column_config.DateColumn("Vencimento"),
-                "tipo_movimento": st.column_config.SelectboxColumn("Tipo", options=["Saída", "Entrada"])
+                "id": None, # Esconde a coluna ID para não criar espaço em branco
+                "pago": st.column_config.CheckboxColumn("Pago?", width="small"),
+                "data_vencimento": st.column_config.DateColumn("Vencimento", width="medium"),
+                "detalhes_despesa": st.column_config.TextColumn("Detalhes da Despesa", required=True, width="large"), # O "large" puxa o espaço vazio
+                "categoria": st.column_config.SelectboxColumn("Categoria", options=["Aluguel Granatto", "Du", "PUC", "Nubank", "Gás", "Condomínio", "Limpeza", "Compras", "PIX", "Outros"], width="medium"),
+                "custo": st.column_config.NumberColumn("Valor (R$)", format="%.2f", width="medium"),
+                "tipo_movimento": st.column_config.SelectboxColumn("Tipo", options=["Saída", "Entrada"], width="small")
             }
         )
 
