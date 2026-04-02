@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 from datetime import datetime
+import yfinance as yf
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Richie Finance OS", layout="wide", page_icon="🚀")
@@ -34,6 +35,27 @@ def carregar_investimentos():
 # 4. CARREGAMENTO INICIAL
 df_pai_geral = carregar_dados_pai()
 df_inv = carregar_investimentos()
+
+@st.cache_data(ttl=300) # Atualiza a cada 5 minutos para não travar
+def obter_preco_atual(ticker):
+    # O Yahoo Finance exige ".SA" para ações brasileiras e "-BRL" para criptos em reais
+    mapa_cripto = {
+        'BTC': 'BTC-BRL', 
+        'SOLANA': 'SOL-BRL', 
+        'PENDLE': 'PENDLE-BRL', 
+        'ETH': 'ETH-BRL'
+    }
+    
+    # Verifica se é cripto (pelo dicionário) ou se é ação brasileira
+    ticker_yf = mapa_cripto.get(ticker.upper(), f"{ticker.upper()}.SA")
+    
+    try:
+        dados = yf.Ticker(ticker_yf).history(period="1d")
+        if not dados.empty:
+            return float(dados['Close'].iloc[-1]) # Pega o preço de fechamento/atual
+    except:
+        pass
+    return 0.0 # Retorna 0 se der erro (ex: código errado)
 
 # 5. CRIAÇÃO DAS ABAS
 tab_pai, tab_inv, tab_cartoes = st.tabs(["🏦 Contas do Pai", "📈 Meus Investimentos", "💳 Cartões"])
@@ -160,29 +182,85 @@ with tab_pai:
             st.rerun()
 
 # ==========================================
-# ABA 2: INVESTIMENTOS
+# ABA 2: INVESTIMENTOS (COM TEMPO REAL)
 # ==========================================
 with tab_inv:
     st.header("📈 Meu Patrimônio")
     if not df_inv.empty:
+        # 1. Agrupar operações e calcular o Preço Médio e Quantidade
         portfolio = {}
         for _, row in df_inv.iterrows():
             tk, tp, q, pr = row['ticker'], row['tipo'], float(row['quantidade']), float(row['preco'])
             if tk not in portfolio: portfolio[tk] = {'qtd': 0.0, 'custo': 0.0, 'pm': 0.0}
+            
             if tp == 'Compra':
                 portfolio[tk]['custo'] += (q * pr)
                 portfolio[tk]['qtd'] += q
-                if portfolio[tk]['qtd'] > 0: portfolio[tk]['pm'] = portfolio[tk]['custo'] / portfolio[tk]['qtd']
+                if portfolio[tk]['qtd'] > 0: 
+                    portfolio[tk]['pm'] = portfolio[tk]['custo'] / portfolio[tk]['qtd']
             elif tp == 'Venda':
                 if portfolio[tk]['qtd'] > 0:
                     custo_venda = q * portfolio[tk]['pm']
                     portfolio[tk]['qtd'] -= q
                     portfolio[tk]['custo'] -= custo_venda
 
-        resumo = pd.DataFrame.from_dict(portfolio, orient='index').reset_index()
-        resumo.columns = ['Ticker', 'Qtd Atual', 'Investimento Total', 'Preço Médio']
-        resumo = resumo[resumo['Qtd Atual'] > 0.000001]
-        st.dataframe(resumo, use_container_width=True, hide_index=True)
+        # 2. Puxar preços online e calcular o Saldo Atual
+        resumo_lista = []
+        total_investido = 0.0
+        total_atual = 0.0
+        
+        st.info("⏳ Puxando cotações em tempo real do mercado...")
+        
+        for tk, dados in portfolio.items():
+            if dados['qtd'] > 0.000001: # Se você ainda tem o ativo
+                preco_hoje = obter_preco_atual(tk)
+                valor_hoje = preco_hoje * dados['qtd']
+                lucro_rs = valor_hoje - dados['custo']
+                lucro_pct = (valor_hoje / dados['custo'] - 1) if dados['custo'] > 0 else 0
+                
+                total_investido += dados['custo']
+                total_atual += valor_hoje
+                
+                resumo_lista.append({
+                    "Ticker": tk,
+                    "Qtd": dados['qtd'],
+                    "PM": dados['pm'],
+                    "Preço Atual": preco_hoje,
+                    "Investido": dados['custo'],
+                    "Saldo Atual": valor_hoje,
+                    "Lucro R$": lucro_rs,
+                    "Lucro %": lucro_pct
+                })
+        
+        # 3. Métricas Gerais (Resumão da Carteira)
+        st.divider()
+        lucro_total_rs = total_atual - total_investido
+        lucro_total_pct = (total_atual / total_investido - 1) * 100 if total_investido > 0 else 0
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("💰 Total Investido (Custo)", f"R$ {total_investido:,.2f}")
+        c2.metric("🚀 Patrimônio Atual", f"R$ {total_atual:,.2f}")
+        c3.metric("📈 Lucro/Prejuízo Total", f"R$ {lucro_total_rs:,.2f}", f"{lucro_total_pct:,.2f}%", delta_color="normal")
+        
+        # 4. Tabela de Detalhes
+        st.write("### 📊 Detalhes por Ativo")
+        resumo_df = pd.DataFrame(resumo_lista)
+        
+        st.dataframe(
+            resumo_df, 
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Ticker": st.column_config.TextColumn("Ativo", width="small"),
+                "Qtd": st.column_config.NumberColumn("Quantidade", width="small", format="%.4f"),
+                "PM": st.column_config.NumberColumn("Preço Médio", format="R$ %.2f", width="small"),
+                "Preço Atual": st.column_config.NumberColumn("Preço Agora", format="R$ %.2f", width="small"),
+                "Investido": st.column_config.NumberColumn("Valor Investido", format="R$ %.2f", width="medium"),
+                "Saldo Atual": st.column_config.NumberColumn("Valor Atual", format="R$ %.2f", width="medium"),
+                "Lucro R$": st.column_config.NumberColumn("Lucro (R$)", format="R$ %.2f", width="medium"),
+                "Lucro %": st.column_config.NumberColumn("Retorno", format="%.2f%%", width="small")
+            }
+        )
     else:
         st.info("Sem dados de investimentos.")
 
